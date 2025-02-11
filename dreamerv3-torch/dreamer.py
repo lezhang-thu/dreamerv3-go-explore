@@ -260,12 +260,12 @@ def reproduce_go_explore_trajectories(config, go_explore_eps):
                 assert score == cumulative_reward, 'recovering the exact trajectory error! score: {} cumulative_reward: {}'.format(
                     score, cumulative_reward
                 )
-                if score < 10_000:
-                    print(
-                        't: {: >20}, score: {: >8}, #transitions: {: >5}'.
-                        format(timestamp, score, len(list_of_actions))
+                print(
+                    't: {: >20}, score: {: >8}, #transitions: {: >5}'.format(
+                        timestamp, score, len(list_of_actions)
                     )
-                else:
+                )
+                if score > 10_000:
                     break_flag = True
 
 
