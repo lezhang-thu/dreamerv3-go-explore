@@ -24,7 +24,7 @@ class TimeLimit(gym.Wrapper):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self._step = 0
-        return self.env.reset()
+        return self.env.reset(seed)
 
 
 class NormalizeActions(gym.Wrapper):
@@ -63,8 +63,8 @@ class OneHotAction(gym.Wrapper):
             raise ValueError(f"Invalid one-hot action:\n{action}")
         return self.env.step(index)
 
-    def reset(self):
-        return self.env.reset()
+    def reset(self, seed=None):
+        return self.env.reset(seed)
 
     def _sample_action(self):
         actions = self.env.action_space.n
@@ -105,6 +105,9 @@ class SelectAction(gym.Wrapper):
     def step(self, action):
         return self.env.step(action[self._key])
 
+    def reset(self, seed=None):
+        return self.env.reset(seed)
+
 
 class UUID(gym.Wrapper):
     def __init__(self, env):
@@ -112,7 +115,7 @@ class UUID(gym.Wrapper):
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
         self.id = f"{timestamp}-{str(uuid.uuid4().hex)}"
 
-    def reset(self):
+    def reset(self, seed=None):
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
         self.id = f"{timestamp}-{str(uuid.uuid4().hex)}"
-        return self.env.reset()
+        return self.env.reset(seed)

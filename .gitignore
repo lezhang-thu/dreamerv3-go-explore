@@ -1,0 +1,13 @@
+# Ignore Python cache directories
+__pycache__/
+
+# Ignore other files and directories
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+.env
+.venv/
+venv/
+*.swp

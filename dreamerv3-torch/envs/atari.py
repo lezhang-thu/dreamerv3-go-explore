@@ -55,7 +55,8 @@ class Atari(gym.Env):
         self._random = np.random.RandomState(seed)
         with self.LOCK:
             self._env = gym.make(
-                'ALE/{}-v5'.format(name.capitalize()),
+                #'ALE/{}-v5'.format(name.capitalize()),
+                'ALE/{}-v5'.format(name),
                 obs_type='rgb',  # ram | rgb | grayscale
                 frameskip=1,  # frame skip
                 mode=None,  # game mode, see Machado et al. 2018
@@ -130,8 +131,8 @@ class Atari(gym.Env):
             is_terminal=dead or over,
         )
 
-    def reset(self):
-        self._env.reset()
+    def reset(self, seed=None):
+        self._env.reset() if seed is None else self._env.reset(seed=seed)
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
                 _, _, dead, _, _ = self._env.step(0)

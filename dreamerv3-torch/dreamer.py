@@ -26,7 +26,7 @@ to_np = lambda x: x.detach().cpu().numpy()
 
 
 class Dreamer(nn.Module):
-    def __init__(self, obs_space, act_space, config, logger, dataset):
+    def __init__(self, obs_space, act_space, config, logger, dataset, go_explore_dataset=None):
         super(Dreamer, self).__init__()
         self._config = config
         self._logger = logger
@@ -41,6 +41,7 @@ class Dreamer(nn.Module):
         self._step = logger.step // config.action_repeat
         self._update_count = 0
         self._dataset = dataset
+        self._go_explore_dataset = go_explore_dataset
         self._wm = models.WorldModel(obs_space, act_space, self._step, config)
         self._task_behavior = models.ImagBehavior(config, self._wm)
         if (
@@ -65,6 +66,9 @@ class Dreamer(nn.Module):
             )
             for _ in range(steps):
                 self._train(next(self._dataset))
+                # go-explore start
+                self._train(next(self._go_explore_dataset))
+                # go-explore end
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
             if self._should_log(step):
@@ -203,6 +207,68 @@ def make_env(config, mode, id):
     return env
 
 
+def reproduce_go_explore_trajectories(config, go_explore_eps):
+    from tools import add_to_cache, convert
+    import pickle
+    with open(
+        os.path.join('..', 'go-explore-action-seqs-all-trajectories.pkl'), 'rb'
+    ) as f:
+        action_seqs = pickle.load(f)
+    break_flag = False
+
+    t_noops = config.noops
+    config.noops = 0
+    go_explore_env = make_env(config, None, 0)
+    config.noops = t_noops
+
+    for item in action_seqs:
+        if break_flag:
+            break
+        list_of_actions, cumulative_reward, timestamp = item
+
+        timestamp = 'go-explore-{}'.format(timestamp)
+        score = 0
+        s_0 = go_explore_env.reset(seed=0)
+
+        t = s_0.copy()
+        t = {k: convert(v) for k, v in t.items()}
+        # action will be added to transition in add_to_cache
+        t["reward"] = 0.0
+        t["discount"] = 1.0
+        # initial state should be added to cache
+        add_to_cache(go_explore_eps, go_explore_env.id, t)
+
+        for a in list_of_actions:
+            action = np.zeros(
+                go_explore_env.action_space.shape[0], dtype=np.int32
+            )
+            action[a] = 1
+            s_1, reward, done, info = go_explore_env.step({"action": action})
+
+            o = {k: convert(v) for k, v in s_1.items()}
+            transition = o.copy()
+            transition["action"] = action
+            transition["reward"] = reward
+            transition["discount"] = info.get(
+                "discount", np.array(1 - float(done))
+            )
+            add_to_cache(go_explore_eps, go_explore_env.id, transition)
+
+            score += reward
+            s_0 = s_1
+            if done:
+                assert score == cumulative_reward, 'recovering the exact trajectory error! score: {} cumulative_reward: {}'.format(
+                    score, cumulative_reward
+                )
+                if score < 10_000:
+                    print(
+                        't: {: >20}, score: {: >8}, #transitions: {: >5}'.
+                        format(timestamp, score, len(list_of_actions))
+                    )
+                else:
+                    break_flag = True
+
+
 def main(config):
     tools.set_seed_everywhere(config.seed)
     if config.deterministic_run:
@@ -229,6 +295,18 @@ def main(config):
     else:
         directory = config.traindir
     train_eps = tools.load_episodes(directory, limit=config.dataset_size)
+
+    # go-explore start
+    import collections
+    go_explore_eps = collections.OrderedDict()
+    print('#' * 10)
+    print('reproduce go-explore trajectories...')
+    reproduce_go_explore_trajectories(config, go_explore_eps)
+    print('#' * 10)
+    print('reproduce go-explore trajectories finished')
+    go_explore_dataset = make_dataset(go_explore_eps, config)
+    # go-explore end
+
     if config.offline_evaldir:
         directory = config.offline_evaldir.format(**vars(config))
     else:
@@ -290,6 +368,7 @@ def main(config):
         config,
         logger,
         train_dataset,
+        go_explore_dataset=go_explore_dataset,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
