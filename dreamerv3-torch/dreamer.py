@@ -67,7 +67,8 @@ class Dreamer(nn.Module):
             for _ in range(steps):
                 self._train(next(self._dataset))
                 # go-explore start
-                self._train(next(self._go_explore_dataset))
+                if self._go_explore_dataset is not None:
+                    self._train(next(self._go_explore_dataset))
                 # go-explore end
                 self._update_count += 1
                 self._metrics["update_count"] = self._update_count
@@ -166,7 +167,7 @@ def make_env(config, mode, id):
             gray=config.grayscale,
             noops=config.noops,
             lives=config.lives,
-            sticky=config.stickey,
+            sticky=config.sticky,
             actions=config.actions,
             resize=config.resize,
             seed=config.seed + id,
@@ -372,7 +373,7 @@ def main(config):
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
-        checkpoint = torch.load(logdir / "latest.pt")
+        checkpoint = torch.load(logdir / "latest.pt", weights_only=False)
         agent.load_state_dict(checkpoint["agent_state_dict"])
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
         agent._should_pretrain._once = False

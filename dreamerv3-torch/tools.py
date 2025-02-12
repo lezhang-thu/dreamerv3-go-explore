@@ -202,7 +202,8 @@ def simulate(
             indices = [index for index, d in enumerate(done) if d]
             # logging for done episode
             for i in indices:
-                save_episodes(directory, {envs[i].id: cache[envs[i].id]})
+                if not is_eval:
+                    save_episodes(directory, {envs[i].id: cache[envs[i].id]})
                 length = len(cache[envs[i].id]["reward"]) - 1
                 score = float(np.array(cache[envs[i].id]["reward"]).sum())
                 video = cache[envs[i].id]["image"]
