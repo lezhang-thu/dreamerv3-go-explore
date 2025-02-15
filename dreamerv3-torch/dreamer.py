@@ -302,7 +302,7 @@ def main(config):
     go_explore_eps = collections.OrderedDict()
     print('#' * 10)
     print('reproduce go-explore trajectories...')
-    reproduce_go_explore_trajectories(config, go_explore_eps)
+    #reproduce_go_explore_trajectories(config, go_explore_eps)
     print('#' * 10)
     print('reproduce go-explore trajectories finished')
     go_explore_dataset = make_dataset(go_explore_eps, config)
@@ -369,7 +369,8 @@ def main(config):
         config,
         logger,
         train_dataset,
-        go_explore_dataset=go_explore_dataset,
+        #go_explore_dataset=go_explore_dataset,
+        go_explore_dataset=None,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
