@@ -124,10 +124,10 @@ class Dreamer(nn.Module):
         post, context, mets = self._wm._train(data)
         metrics.update(mets)
         start = post
-        reward = lambda f, s, a: self._wm.heads["reward"](
+        reward = lambda s: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
-        metrics.update(self._task_behavior._train(start, reward)[-1])
+        metrics.update(self._task_behavior._train(start, reward))
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
             metrics.update({"expl_" + key: value for key, value in mets.items()})
@@ -302,7 +302,7 @@ def main(config):
     go_explore_eps = collections.OrderedDict()
     print('#' * 10)
     print('reproduce go-explore trajectories...')
-    #reproduce_go_explore_trajectories(config, go_explore_eps)
+    reproduce_go_explore_trajectories(config, go_explore_eps)
     print('#' * 10)
     print('reproduce go-explore trajectories finished')
     go_explore_dataset = make_dataset(go_explore_eps, config)
@@ -369,8 +369,8 @@ def main(config):
         config,
         logger,
         train_dataset,
-        #go_explore_dataset=go_explore_dataset,
-        go_explore_dataset=None,
+        go_explore_dataset=go_explore_dataset,
+        #go_explore_dataset=None,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():

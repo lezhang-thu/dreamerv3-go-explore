@@ -294,39 +294,38 @@ class ImagBehavior(nn.Module):
 
         with tools.RequiresGrad(self.actor):
             with torch.cuda.amp.autocast(self._use_amp):
-                imag_feat, imag_state, imag_action = self._imagine(
+                imag_feat, succ, imag_action = self._imagine(
                     start, self.actor, self._config.imag_horizon
                 )
-                reward = objective(imag_feat, imag_state, imag_action)
+                reward = objective(succ)
                 actor_ent = self.actor(imag_feat).entropy()
-                state_ent = self._world_model.dynamics.get_dist(imag_state).entropy()
                 # this target is not scaled by ema or sym_log.
-                target, weights, base = self._compute_target(
-                    imag_feat, imag_state, reward
+                target = self._compute_target(
+                    imag_feat, succ, reward
                 )
+                weights = torch.cumprod(imag_feat, 0).detach()
                 actor_loss, mets = self._compute_actor_loss(
                     imag_feat,
                     imag_action,
                     target,
                     weights,
-                    base,
                 )
-                actor_loss -= self._config.actor["entropy"] * actor_ent[:-1, ..., None]
+                actor_loss -= self._config.actor["entropy"] * actor_ent[..., None]
                 actor_loss = torch.mean(actor_loss)
                 metrics.update(mets)
                 value_input = imag_feat
 
         with tools.RequiresGrad(self.value):
             with torch.cuda.amp.autocast(self._use_amp):
-                value = self.value(value_input[:-1].detach())
+                value = self.value(value_input.detach())
                 target = torch.stack(target, dim=1)
                 # (time, batch, 1), (time, batch, 1) -> (time, batch)
                 value_loss = -value.log_prob(target.detach())
-                slow_target = self._slow_value(value_input[:-1].detach())
+                slow_target = self._slow_value(value_input.detach())
                 if self._config.critic["slow_target"]:
                     value_loss -= value.log_prob(slow_target.mode().detach())
                 # (time, batch, 1), (time, batch, 1) -> (1,)
-                value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
+                value_loss = torch.mean(weights * value_loss[:, :, None])
 
         metrics.update(tools.tensorstats(value.mode(), "value"))
         metrics.update(tools.tensorstats(target, "target"))
@@ -343,7 +342,7 @@ class ImagBehavior(nn.Module):
         with tools.RequiresGrad(self):
             metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             metrics.update(self._value_opt(value_loss, self.value.parameters()))
-        return imag_feat, imag_state, imag_action, weights, metrics
+        return metrics
 
     def _imagine(self, start, policy, horizon):
         dynamics = self._world_model.dynamics
@@ -361,29 +360,24 @@ class ImagBehavior(nn.Module):
         succ, feats, actions = tools.static_scan(
             step, [torch.arange(horizon)], (start, None, None)
         )
-        states = {k: torch.cat([start[k][None], v[:-1]], 0) for k, v in succ.items()}
+        return feats, succ, actions
 
-        return feats, states, actions
-
-    def _compute_target(self, imag_feat, imag_state, reward):
+    def _compute_target(self, imag_feat, succ, reward):
         if "cont" in self._world_model.heads:
-            inp = self._world_model.dynamics.get_feat(imag_state)
+            inp = self._world_model.dynamics.get_feat(succ)
             discount = self._config.discount * self._world_model.heads["cont"](inp).mean
         else:
             discount = self._config.discount * torch.ones_like(reward)
-        value = self.value(imag_feat).mode()
+        value = self.value(inp).mode()
         target = tools.lambda_return(
-            reward[1:],
-            value[:-1],
-            discount[1:],
+            reward,
+            value,
+            discount,
             bootstrap=value[-1],
             lambda_=self._config.discount_lambda,
             axis=0,
         )
-        weights = torch.cumprod(
-            torch.cat([torch.ones_like(discount[:1]), discount[:-1]], 0), 0
-        ).detach()
-        return target, weights, value[:-1]
+        return target
 
     def _compute_actor_loss(
         self,
@@ -391,13 +385,13 @@ class ImagBehavior(nn.Module):
         imag_action,
         target,
         weights,
-        base,
     ):
         metrics = {}
         inp = imag_feat.detach()
         policy = self.actor(inp)
         # Q-val for actor is not transformed using symlog
         target = torch.stack(target, dim=1)
+        base = self.value(imag_feat).mode().detach()
         if self._config.reward_EMA:
             offset, scale = self.reward_ema(target, self.ema_vals)
             normed_target = (target - offset) / scale
@@ -411,20 +405,20 @@ class ImagBehavior(nn.Module):
             actor_target = adv
         elif self._config.imag_gradient == "reinforce":
             actor_target = (
-                policy.log_prob(imag_action)[:-1][:, :, None]
-                * (target - self.value(imag_feat[:-1]).mode()).detach()
+                policy.log_prob(imag_action)[:, :, None]
+                * (target - base).detach()
             )
         elif self._config.imag_gradient == "both":
             actor_target = (
-                policy.log_prob(imag_action)[:-1][:, :, None]
-                * (target - self.value(imag_feat[:-1]).mode()).detach()
+                policy.log_prob(imag_action)[:, :, None]
+                * (target - base).detach()
             )
             mix = self._config.imag_gradient_mix
             actor_target = mix * target + (1 - mix) * actor_target
             metrics["imag_gradient_mix"] = mix
         else:
             raise NotImplementedError(self._config.imag_gradient)
-        actor_loss = -weights[:-1] * actor_target
+        actor_loss = -weights * actor_target
         return actor_loss, metrics
 
     def _update_slow_target(self):
