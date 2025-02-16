@@ -303,7 +303,7 @@ class ImagBehavior(nn.Module):
                 target = self._compute_target(
                     imag_feat, succ, reward
                 )
-                weights = torch.cumprod(imag_feat, 0).detach()
+                weights = torch.cumprod(self._world_model.heads["cont"](imag_feat).mean, 0).detach()
                 actor_loss, mets = self._compute_actor_loss(
                     imag_feat,
                     imag_action,
