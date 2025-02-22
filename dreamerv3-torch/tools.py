@@ -351,6 +351,7 @@ def generator(episodes, *, batch_size=None, batch_length=None):
                 mask[k, :length] = True
             result['mask'] = mask
             assert 'action' in result
+            assert 'reward' in result
             yield result
 
 
@@ -525,7 +526,8 @@ class DiscDist:
     # Inside OneHotCategorical, log_prob is calculated using only max element in targets
     def log_prob(self, x):
         x = self.transfwd(x)
-        # x(time, batch, 1)
+        #print("x.shape", x.shape)
+        # x (time, batch, 1)
         below = torch.sum((self.buckets <= x[..., None]).to(torch.int32), dim=-1) - 1
         above = len(self.buckets) - torch.sum(
             (self.buckets > x[..., None]).to(torch.int32), dim=-1
@@ -545,8 +547,6 @@ class DiscDist:
             + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
         )
         log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
-        target = target.squeeze(-2)
-
         return (target * log_pred).sum(-1)
 
     def log_prob_target(self, target):

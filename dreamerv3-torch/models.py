@@ -111,6 +111,7 @@ class WorldModel(nn.Module):
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         data = self.preprocess(data)
+        #data["reward"].unsqueeze_(-1)
 
         with tools.RequiresGrad(self):
             with torch.cuda.amp.autocast(self._use_amp):
@@ -335,12 +336,13 @@ class ImagBehavior(nn.Module):
         with tools.RequiresGrad(self.value):
             with torch.cuda.amp.autocast(self._use_amp):
                 value = self.value(value_input.detach())
-                target = torch.stack(target, dim=1)
-                # (time, batch, 1), (time, batch, 1) -> (time, batch)
+                target = torch.stack(target, dim=1).squeeze(-1)
+                # (time, batch, 1), (time, batch) -> (time, batch)
                 value_loss = -value.log_prob(target.detach())
                 slow_target = self._slow_value(value_input.detach())
                 if self._config.critic["slow_target"]:
-                    value_loss -= value.log_prob(slow_target.mode().detach())
+                    xx = slow_target.mode().detach().squeeze(-1)
+                    value_loss -= value.log_prob(xx)
                 # (time, batch, 1), (time, batch, 1) -> (1,)
                 value_loss = weights * value_loss[:, :, None]
                 value_loss = value_loss.reshape(self._config.imag_horizon, *mask.shape)

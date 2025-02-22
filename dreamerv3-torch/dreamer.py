@@ -222,6 +222,8 @@ def reproduce_go_explore_trajectories(config, go_explore_eps):
     config.noops = 0
     go_explore_env = make_env(config, None, 0)
     config.noops = t_noops
+    acts = go_explore_env.action_space
+    num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
 
     for item in action_seqs:
         if break_flag:
@@ -234,14 +236,14 @@ def reproduce_go_explore_trajectories(config, go_explore_eps):
 
         t = s_0.copy()
         t = {k: convert(v) for k, v in t.items()}
-        # action will be added to transition in add_to_cache
         t["reward"] = 0.0
+        t["action"] = np.zeros(num_actions, dtype=np.float32)
         # initial state should be added to cache
         add_to_cache(go_explore_eps, go_explore_env.id, t)
 
         for a in list_of_actions:
             action = np.zeros(
-                go_explore_env.action_space.shape[0], dtype=np.int32
+                num_actions, dtype=np.float32
             )
             action[a] = 1
             s_1, reward, done, info = go_explore_env.step({"action": action})
@@ -299,7 +301,7 @@ def main(config):
     go_explore_eps = collections.OrderedDict()
     print('#' * 10)
     print('reproduce go-explore trajectories...')
-    #reproduce_go_explore_trajectories(config, go_explore_eps)
+    reproduce_go_explore_trajectories(config, go_explore_eps)
     print('#' * 10)
     print('reproduce go-explore trajectories finished')
     go_explore_dataset = make_dataset(go_explore_eps, config)
@@ -368,8 +370,8 @@ def main(config):
         config,
         logger,
         train_dataset,
-        #go_explore_dataset=go_explore_dataset,
-        go_explore_dataset=None,
+        go_explore_dataset=go_explore_dataset,
+        #go_explore_dataset=None,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
