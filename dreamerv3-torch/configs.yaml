@@ -59,7 +59,8 @@ defaults:
   kl_free: 1.0
   weight_decay: 0.0
   unimix_ratio: 0.01
-  initial: 'learned'
+  #initial: 'learned'
+  initial: 'zeros'
 
   # Training
   batch_size: 16
@@ -135,7 +136,8 @@ atari100k:
   envs: 1
   action_repeat: 4
   train_ratio: 1024
-  video_pred_log: true
+  #video_pred_log: true
+  video_pred_log: False
   eval_episode_num: 100
   actor: {dist: 'onehot', std: 'none'}
   imag_gradient: 'reinforce'

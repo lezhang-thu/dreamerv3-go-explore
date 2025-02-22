@@ -104,20 +104,31 @@ class WorldModel(nn.Module):
             reward=config.reward_head["loss_scale"],
             cont=config.cont_head["loss_scale"],
         )
+        self._wm_h_tm1 = None
 
     def _train(self, data):
         # action (batch_size, batch_length, act_dim)
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
-        # discount (batch_size, batch_length)
         data = self.preprocess(data)
 
         with tools.RequiresGrad(self):
             with torch.cuda.amp.autocast(self._use_amp):
                 embed = self.encoder(data)
+                check_s0 = data["is_first"][:, 0, ...]
+                assert torch.all(check_s0 == 0.0) or torch.all(check_s0 == 1.0)
+                if torch.all(check_s0 == 1.0):
+                    self._wm_h_tm1 = None
+                
                 post, prior = self.dynamics.observe(
-                    embed, data["action"], data["is_first"]
+                    embed, data["action"], data["is_first"],
+                    state=self._wm_h_tm1,
                 )
+                self._wm_h_hm1 = dict(
+                    deter=post["deter"][:, -1, ...].detach(),
+                    stoch=post["stoch"][:, -1, ...].detach(),
+                )
+
                 kl_free = self._config.kl_free
                 dyn_scale = self._config.dyn_scale
                 rep_scale = self._config.rep_scale
@@ -145,30 +156,32 @@ class WorldModel(nn.Module):
                     for key, value in losses.items()
                 }
                 model_loss = sum(scaled.values()) + kl_loss
+                model_loss = model_loss * data["mask"]
             metrics = self._model_opt(torch.mean(model_loss), self.parameters())
 
-        metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
-        metrics["kl_free"] = kl_free
-        metrics["dyn_scale"] = dyn_scale
-        metrics["rep_scale"] = rep_scale
-        metrics["dyn_loss"] = to_np(dyn_loss)
-        metrics["rep_loss"] = to_np(rep_loss)
-        metrics["kl"] = to_np(torch.mean(kl_value))
-        with torch.cuda.amp.autocast(self._use_amp):
-            metrics["prior_ent"] = to_np(
-                torch.mean(self.dynamics.get_dist(prior).entropy())
-            )
-            metrics["post_ent"] = to_np(
-                torch.mean(self.dynamics.get_dist(post).entropy())
-            )
-            context = dict(
-                embed=embed,
-                feat=self.dynamics.get_feat(post),
-                kl=kl_value,
-                postent=self.dynamics.get_dist(post).entropy(),
-            )
+        #metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
+        #metrics["kl_free"] = kl_free
+        #metrics["dyn_scale"] = dyn_scale
+        #metrics["rep_scale"] = rep_scale
+        #metrics["dyn_loss"] = to_np(dyn_loss)
+        #metrics["rep_loss"] = to_np(rep_loss)
+        #metrics["kl"] = to_np(torch.mean(kl_value))
+        #with torch.cuda.amp.autocast(self._use_amp):
+        #    metrics["prior_ent"] = to_np(
+        #        torch.mean(self.dynamics.get_dist(prior).entropy())
+        #    )
+        #    metrics["post_ent"] = to_np(
+        #        torch.mean(self.dynamics.get_dist(post).entropy())
+        #    )
+        #    context = dict(
+        #        embed=embed,
+        #        feat=self.dynamics.get_feat(post),
+        #        kl=kl_value,
+        #        postent=self.dynamics.get_dist(post).entropy(),
+        #    )
         post = {k: v.detach() for k, v in post.items()}
-        return post, context, metrics
+        #return post, context, metrics
+        return post, None, metrics
 
     # this function is called during both rollout and training
     def preprocess(self, obs):
@@ -177,10 +190,6 @@ class WorldModel(nn.Module):
             for k, v in obs.items()
         }
         obs["image"] = obs["image"] / 255.0
-        if "discount" in obs:
-            obs["discount"] *= self._config.discount
-            # (batch_size, batch_length) -> (batch_size, batch_length, 1)
-            obs["discount"] = obs["discount"].unsqueeze(-1)
         # 'is_first' is necesarry to initialize hidden state at training
         assert "is_first" in obs
         # 'is_terminal' is necesarry to train cont_head
@@ -188,28 +197,28 @@ class WorldModel(nn.Module):
         obs["cont"] = (1.0 - obs["is_terminal"]).unsqueeze(-1)
         return obs
 
-    def video_pred(self, data):
-        data = self.preprocess(data)
-        embed = self.encoder(data)
+    #def video_pred(self, data):
+    #    data = self.preprocess(data)
+    #    embed = self.encoder(data)
 
-        states, _ = self.dynamics.observe(
-            embed[:6, :5], data["action"][:6, :5], data["is_first"][:6, :5]
-        )
-        recon = self.heads["decoder"](self.dynamics.get_feat(states))["image"].mode()[
-            :6
-        ]
-        reward_post = self.heads["reward"](self.dynamics.get_feat(states)).mode()[:6]
-        init = {k: v[:, -1] for k, v in states.items()}
-        prior = self.dynamics.imagine_with_action(data["action"][:6, 5:], init)
-        openl = self.heads["decoder"](self.dynamics.get_feat(prior))["image"].mode()
-        reward_prior = self.heads["reward"](self.dynamics.get_feat(prior)).mode()
-        # observed image is given until 5 steps
-        model = torch.cat([recon[:, :5], openl], 1)
-        truth = data["image"][:6]
-        model = model
-        error = (model - truth + 1.0) / 2.0
+    #    states, _ = self.dynamics.observe(
+    #        embed[:6, :5], data["action"][:6, :5], data["is_first"][:6, :5]
+    #    )
+    #    recon = self.heads["decoder"](self.dynamics.get_feat(states))["image"].mode()[
+    #        :6
+    #    ]
+    #    reward_post = self.heads["reward"](self.dynamics.get_feat(states)).mode()[:6]
+    #    init = {k: v[:, -1] for k, v in states.items()}
+    #    prior = self.dynamics.imagine_with_action(data["action"][:6, 5:], init)
+    #    openl = self.heads["decoder"](self.dynamics.get_feat(prior))["image"].mode()
+    #    reward_prior = self.heads["reward"](self.dynamics.get_feat(prior)).mode()
+    #    # observed image is given until 5 steps
+    #    model = torch.cat([recon[:, :5], openl], 1)
+    #    truth = data["image"][:6]
+    #    model = model
+    #    error = (model - truth + 1.0) / 2.0
 
-        return torch.cat([truth, model, error], 2)
+    #    return torch.cat([truth, model, error], 2)
 
 
 class ImagBehavior(nn.Module):
@@ -288,7 +297,9 @@ class ImagBehavior(nn.Module):
         self,
         start,
         objective,
+        mask,
     ):
+        mask = torch.tensor(mask, device=self._config.device, dtype=torch.float32)
         self._update_slow_target()
         metrics = {}
 
@@ -297,6 +308,10 @@ class ImagBehavior(nn.Module):
                 imag_feat, succ, imag_action = self._imagine(
                     start, self.actor, self._config.imag_horizon
                 )
+                # debug
+                #print('imag_feat.shape', imag_feat.shape)
+                #print('succ["deter"].shape', succ["deter"].shape)
+                #print('imag_action.shape', imag_action.shape)
                 reward = objective(succ)
                 actor_ent = self.actor(imag_feat).entropy()
                 # this target is not scaled by ema or sym_log.
@@ -304,15 +319,17 @@ class ImagBehavior(nn.Module):
                     imag_feat, succ, reward
                 )
                 weights = torch.cumprod(self._world_model.heads["cont"](imag_feat).mean, 0).detach()
-                actor_loss, mets = self._compute_actor_loss(
+                actor_loss, _ = self._compute_actor_loss(
                     imag_feat,
                     imag_action,
                     target,
                     weights,
                 )
                 actor_loss -= self._config.actor["entropy"] * actor_ent[..., None]
+                actor_loss = actor_loss.reshape(self._config.imag_horizon, *mask.shape)
+                actor_loss = actor_loss * mask
                 actor_loss = torch.mean(actor_loss)
-                metrics.update(mets)
+                #metrics.update(mets)
                 value_input = imag_feat
 
         with tools.RequiresGrad(self.value):
@@ -325,20 +342,23 @@ class ImagBehavior(nn.Module):
                 if self._config.critic["slow_target"]:
                     value_loss -= value.log_prob(slow_target.mode().detach())
                 # (time, batch, 1), (time, batch, 1) -> (1,)
-                value_loss = torch.mean(weights * value_loss[:, :, None])
-
-        metrics.update(tools.tensorstats(value.mode(), "value"))
-        metrics.update(tools.tensorstats(target, "target"))
-        metrics.update(tools.tensorstats(reward, "imag_reward"))
-        if self._config.actor["dist"] in ["onehot"]:
-            metrics.update(
-                tools.tensorstats(
-                    torch.argmax(imag_action, dim=-1).float(), "imag_action"
-                )
-            )
-        else:
-            metrics.update(tools.tensorstats(imag_action, "imag_action"))
-        metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
+                value_loss = weights * value_loss[:, :, None]
+                value_loss = value_loss.reshape(self._config.imag_horizon, *mask.shape)
+                value_loss = value_loss * mask
+                value_loss = torch.mean(value_loss)
+        
+        #metrics.update(tools.tensorstats(value.mode(), "value"))
+        #metrics.update(tools.tensorstats(target, "target"))
+        #metrics.update(tools.tensorstats(reward, "imag_reward"))
+        #if self._config.actor["dist"] in ["onehot"]:
+        #    metrics.update(
+        #        tools.tensorstats(
+        #            torch.argmax(imag_action, dim=-1).float(), "imag_action"
+        #        )
+        #    )
+        #else:
+        #    metrics.update(tools.tensorstats(imag_action, "imag_action"))
+        #metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
         with tools.RequiresGrad(self):
             metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             metrics.update(self._value_opt(value_loss, self.value.parameters()))
@@ -397,9 +417,9 @@ class ImagBehavior(nn.Module):
             normed_target = (target - offset) / scale
             normed_base = (base - offset) / scale
             adv = normed_target - normed_base
-            metrics.update(tools.tensorstats(normed_target, "normed_target"))
-            metrics["EMA_005"] = to_np(self.ema_vals[0])
-            metrics["EMA_095"] = to_np(self.ema_vals[1])
+            #metrics.update(tools.tensorstats(normed_target, "normed_target"))
+            #metrics["EMA_005"] = to_np(self.ema_vals[0])
+            #metrics["EMA_095"] = to_np(self.ema_vals[1])
 
         if self._config.imag_gradient == "dynamics":
             actor_target = adv
@@ -415,7 +435,7 @@ class ImagBehavior(nn.Module):
             )
             mix = self._config.imag_gradient_mix
             actor_target = mix * target + (1 - mix) * actor_target
-            metrics["imag_gradient_mix"] = mix
+            #metrics["imag_gradient_mix"] = mix
         else:
             raise NotImplementedError(self._config.imag_gradient)
         actor_loss = -weights * actor_target

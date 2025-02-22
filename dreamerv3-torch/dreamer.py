@@ -127,7 +127,7 @@ class Dreamer(nn.Module):
         reward = lambda s: self._wm.heads["reward"](
             self._wm.dynamics.get_feat(s)
         ).mode()
-        metrics.update(self._task_behavior._train(start, reward))
+        metrics.update(self._task_behavior._train(start, reward, data["mask"]))
         if self._config.expl_behavior != "greedy":
             mets = self._expl_behavior.train(start, context, data)[-1]
             metrics.update({"expl_" + key: value for key, value in mets.items()})
@@ -143,9 +143,10 @@ def count_steps(folder):
 
 
 def make_dataset(episodes, config):
-    generator = tools.sample_episodes(episodes, config.batch_length)
-    dataset = tools.from_generator(generator, config.batch_size)
-    return dataset
+    #generator = tools.sample_episodes(episodes, config.batch_length)
+    #dataset = tools.from_generator(generator, config.batch_size)
+    #return dataset
+    return tools.generator(episodes, batch_size=config.batch_size, batch_length=config.batch_length)
 
 
 def make_env(config, mode, id):
@@ -235,7 +236,6 @@ def reproduce_go_explore_trajectories(config, go_explore_eps):
         t = {k: convert(v) for k, v in t.items()}
         # action will be added to transition in add_to_cache
         t["reward"] = 0.0
-        t["discount"] = 1.0
         # initial state should be added to cache
         add_to_cache(go_explore_eps, go_explore_env.id, t)
 
@@ -250,9 +250,6 @@ def reproduce_go_explore_trajectories(config, go_explore_eps):
             transition = o.copy()
             transition["action"] = action
             transition["reward"] = reward
-            transition["discount"] = info.get(
-                "discount", np.array(1 - float(done))
-            )
             add_to_cache(go_explore_eps, go_explore_env.id, transition)
 
             score += reward
@@ -302,7 +299,7 @@ def main(config):
     go_explore_eps = collections.OrderedDict()
     print('#' * 10)
     print('reproduce go-explore trajectories...')
-    reproduce_go_explore_trajectories(config, go_explore_eps)
+    #reproduce_go_explore_trajectories(config, go_explore_eps)
     print('#' * 10)
     print('reproduce go-explore trajectories finished')
     go_explore_dataset = make_dataset(go_explore_eps, config)
@@ -356,21 +353,23 @@ def main(config):
             logger,
             limit=config.dataset_size,
             steps=prefill,
+            num_actions=config.num_actions,
         )
         logger.step += prefill * config.action_repeat
         print(f"Logger: ({logger.step} steps).")
 
     print("Simulate agent.")
     train_dataset = make_dataset(train_eps, config)
-    eval_dataset = make_dataset(eval_eps, config)
+    #eval_dataset = make_dataset(eval_eps, config)
+    eval_dataset = None
     agent = Dreamer(
         train_envs[0].observation_space,
         train_envs[0].action_space,
         config,
         logger,
         train_dataset,
-        go_explore_dataset=go_explore_dataset,
-        #go_explore_dataset=None,
+        #go_explore_dataset=go_explore_dataset,
+        go_explore_dataset=None,
     ).to(config.device)
     agent.requires_grad_(requires_grad=False)
     if (logdir / "latest.pt").exists():
@@ -393,6 +392,7 @@ def main(config):
                 logger,
                 is_eval=True,
                 episodes=config.eval_episode_num,
+                num_actions=config.num_actions,
             )
             if config.video_pred_log:
                 video_pred = agent._wm.video_pred(next(eval_dataset))
@@ -407,6 +407,7 @@ def main(config):
             limit=config.dataset_size,
             steps=config.eval_every,
             state=state,
+            num_actions=config.num_actions,
         )
         items_to_save = {
             "agent_state_dict": agent.state_dict(),

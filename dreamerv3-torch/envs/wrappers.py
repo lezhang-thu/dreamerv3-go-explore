@@ -17,8 +17,6 @@ class TimeLimit(gym.Wrapper):
         self._time_limit_step += 1
         if self._time_limit_step >= self._duration:
             done = True
-            if "discount" not in info:
-                info["discount"] = np.array(1.0).astype(np.float32)
             self._time_limit_step = None
         return obs, reward, done, info
 

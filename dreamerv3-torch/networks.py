@@ -126,9 +126,9 @@ class RSSM(nn.Module):
 
     def observe(self, embed, action, is_first, state=None):
         swap = lambda x: x.permute([1, 0] + list(range(2, len(x.shape))))
-        # (batch, time, ch) -> (time, batch, ch)
+        # (batch, time, ...) -> (time, batch, ...)
         embed, action, is_first = swap(embed), swap(action), swap(is_first)
-        # prev_state[0] means selecting posterior of return(posterior, prior) from obs_step
+        # prev_state[0] means selecting posterior of return (posterior, prior) from obs_step
         post, prior = tools.static_scan(
             lambda prev_state, prev_act, embed, is_first: self.obs_step(
                 prev_state[0], prev_act, embed, is_first
@@ -137,7 +137,7 @@ class RSSM(nn.Module):
             (state, state),
         )
 
-        # (batch, time, stoch, discrete_num) -> (batch, time, stoch, discrete_num)
+        # (time, batch, stoch, discrete_num) -> (batch, time, stoch, discrete_num)
         post = {k: swap(v) for k, v in post.items()}
         prior = {k: swap(v) for k, v in prior.items()}
         return post, prior
@@ -223,7 +223,7 @@ class RSSM(nn.Module):
             deter = deter[0]  # Keras wraps the state in a list.
         # (batch, deter) -> (batch, hidden)
         x = self._img_out_layers(x)
-        # (batch, hidden) -> (batch_size, stoch, discrete_num)
+        # (batch, hidden) -> (batch, stoch, discrete_num)
         stats = self._suff_stats_layer("ims", x)
         if sample:
             stoch = self.get_dist(stats).sample()

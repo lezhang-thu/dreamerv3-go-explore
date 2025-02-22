@@ -136,6 +136,7 @@ def simulate(
     steps=0,
     episodes=0,
     state=None,
+    num_actions=None,
 ):
     # initialize or unpack simulation state
     if state is None:
@@ -156,9 +157,8 @@ def simulate(
             for index, result in zip(indices, results):
                 t = result.copy()
                 t = {k: convert(v) for k, v in t.items()}
-                # action will be added to transition in add_to_cache
                 t["reward"] = 0.0
-                t["discount"] = 1.0
+                t["action"] = np.zeros(num_actions, dtype=np.float32)
                 # initial state should be added to cache
                 add_to_cache(cache, envs[index].id, t)
                 # replace obs with done by initial state
@@ -190,12 +190,8 @@ def simulate(
             o, r, d, info = result
             o = {k: convert(v) for k, v in o.items()}
             transition = o.copy()
-            if isinstance(a, dict):
-                transition.update(a)
-            else:
-                transition["action"] = a
+            transition["action"] = a["action"] if isinstance(a, dict) else a
             transition["reward"] = r
-            transition["discount"] = info.get("discount", np.array(1 - float(d)))
             add_to_cache(cache, env.id, transition)
 
         if done.any():
@@ -250,19 +246,14 @@ def simulate(
     return (step - steps, episode - episodes, done, length, obs, agent_state, reward)
 
 
-def add_to_cache(cache, id, transition):
-    if id not in cache:
-        cache[id] = dict()
+def add_to_cache(cache, x_id, transition):
+    if x_id not in cache:
+        cache[x_id] = dict()
         for key, val in transition.items():
-            cache[id][key] = [convert(val)]
+            cache[x_id][key] = [convert(val)]
     else:
         for key, val in transition.items():
-            if key not in cache[id]:
-                # fill missing data(action, etc.) at second time
-                cache[id][key] = [convert(0 * val)]
-                cache[id][key].append(convert(val))
-            else:
-                cache[id][key].append(convert(val))
+            cache[x_id][key].append(convert(val))
 
 
 def erase_over_episodes(cache, dataset_size):
@@ -305,6 +296,62 @@ def save_episodes(directory, episodes):
             with filename.open("wb") as f2:
                 f2.write(f1.read())
     return True
+
+
+def generator(episodes, *, batch_size=None, batch_length=None):
+    while True:
+        trajectories = np.random.choice(list(episodes.values()),
+                                        size=batch_size,
+                                        replace=True)
+        max_len = max(len(next(iter(t.values()))) for t in trajectories)
+        num_chunks = -(-max_len // batch_length)
+        for k in range(num_chunks):
+            start = k * batch_length
+            dict_list = []
+            segment_lengths = []
+            for traj in trajectories:
+                traj_len = len(next(iter(traj.values())))
+                segment_dict = {
+                    key: (np.stack(val[start:start + batch_length].copy(), 0)
+                          if start < traj_len else None)
+                    for key, val in traj.items()
+                }
+                dict_list.append(segment_dict)
+                segment_len = min(start + batch_length,
+                                  traj_len) - start if start < traj_len else 0
+                segment_lengths.append(segment_len)
+            result = {}
+            for key in dict_list[0].keys():
+                values = [d[key] for d in dict_list]
+                arrays = [v for v in values if v is not None]
+                shapes = [arr.shape for arr in arrays]
+                assert all(shape[1:] == shapes[0][1:] for shape in shapes)
+                max_d0 = max(shape[0] for shape in shapes)
+                common_shape_tail = shapes[0][1:]
+                common_dtype = np.find_common_type(
+                    [arr.dtype for arr in arrays], [])
+                padded_arrays = []
+                for value in values:
+                    arr = (np.array(
+                        [], dtype=common_dtype).reshape((0, ) +
+                                                        common_shape_tail)
+                           if value is None else value)
+                    if arr.shape[0] < max_d0:
+                        pad_width = [(0, max_d0 - arr.shape[0])
+                                     ] + [(0, 0)] * (arr.ndim - 1)
+                        arr = np.pad(arr,
+                                     pad_width,
+                                     mode='constant',
+                                     constant_values=0)
+                    padded_arrays.append(arr)
+                result[key] = np.stack(padded_arrays, 0)
+            mask = np.zeros((batch_size, result[next(iter(result))].shape[1]),
+                            dtype=bool)
+            for k, length in enumerate(segment_lengths):
+                mask[k, :length] = True
+            result['mask'] = mask
+            assert 'action' in result
+            yield result
 
 
 def from_generator(generator, batch_size):
@@ -671,7 +718,7 @@ class TanhBijector(torchd.Transform):
 
 def static_scan_for_lambda_return(fn, inputs, start):
     last = start
-    outputs = None 
+    outputs = None
     indices = range(inputs[0].shape[0])
     indices = reversed(indices)
     for index in indices:
@@ -792,14 +839,14 @@ def static_scan(fn, inputs, start):
         inp = lambda x: (_input[x] for _input in inputs)
         last = fn(last, *inp(index))
         if flag:
-            if type(last) == type({}):
+            if type(last) == dict:
                 outputs = {
                     key: value.clone().unsqueeze(0) for key, value in last.items()
                 }
             else:
                 outputs = []
                 for _last in last:
-                    if type(_last) == type({}):
+                    if type(_last) == dict:
                         outputs.append(
                             {
                                 key: value.clone().unsqueeze(0)
@@ -810,14 +857,14 @@ def static_scan(fn, inputs, start):
                         outputs.append(_last.clone().unsqueeze(0))
             flag = False
         else:
-            if type(last) == type({}):
+            if type(last) == dict:
                 for key in last.keys():
                     outputs[key] = torch.cat(
                         [outputs[key], last[key].unsqueeze(0)], dim=0
                     )
             else:
                 for j in range(len(outputs)):
-                    if type(last[j]) == type({}):
+                    if type(last[j]) == dict:
                         for key in last[j].keys():
                             outputs[j][key] = torch.cat(
                                 [outputs[j][key], last[j][key].unsqueeze(0)], dim=0
@@ -826,7 +873,7 @@ def static_scan(fn, inputs, start):
                         outputs[j] = torch.cat(
                             [outputs[j], last[j].unsqueeze(0)], dim=0
                         )
-    if type(last) == type({}):
+    if type(last) == dict:
         outputs = [outputs]
     return outputs
 

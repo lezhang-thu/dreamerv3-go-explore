@@ -24,7 +24,7 @@ class Atari(gym.Env):
         seed=None,
     ):
         assert size[0] == size[1]
-        assert lives in ("unused", "discount", "reset"), lives
+        assert lives in ("unused", "reset"), lives
         assert actions in ("all", "needed"), actions
         assert resize in ("opencv", "pillow"), resize
         if self.LOCK is None:
